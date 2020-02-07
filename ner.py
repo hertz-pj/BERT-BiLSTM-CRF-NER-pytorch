@@ -63,11 +63,12 @@ def main():
     
     parser.add_argument("--max_seq_length", default=256, type=int)
     parser.add_argument("--do_train", default=False, type=boolean_string)
+    parser.add_argument("--do_eval", default=False, type=boolean_string)
     parser.add_argument("--do_test", default=False, type=boolean_string)
     parser.add_argument("--train_batch_size", default=8, type=int)
     parser.add_argument("--eval_batch_size", default=8, type=int)
     parser.add_argument("--learning_rate", default=3e-5, type=float)
-    parser.add_argument("--num_train_epochs", default=20, type=float)
+    parser.add_argument("--num_train_epochs", default=10, type=float)
     parser.add_argument("--warmup_proprotion", default=0.1, type=float)
     parser.add_argument("--use_weight", default=1, type=int)
     parser.add_argument("--local_rank", type=int, default=-1)
@@ -79,15 +80,21 @@ def main():
     parser.add_argument("--adam_epsilon", default=1e-8, type=float)
     parser.add_argument("--max_steps", default=-1, type=int)
     parser.add_argument("--do_lower_case", action='store_true')
+    parser.add_argument("--logging_steps", default=500, type=int)
 
     parser.add_argument("--need_birnn", default=False, type=boolean_string)
     parser.add_argument("--rnn_dim", default=128, type=int)
-    
+
+    parser.add_argument("--gpu_id", default="0", type=str)
 
     args = parser.parse_args()
 
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
+
     device = torch.device("cuda")
     n_gpu = torch.cuda.device_count()
+
+    
 
     logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                         datefmt = '%m/%d/%Y %H:%M:%S',
@@ -110,6 +117,12 @@ def main():
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
+    if not os.path.exists(os.path.join(args.output_dir, "eval")):
+        os.makedirs(os.path.join(args.output_dir, "eval"))
+    
+    writer = SummaryWriter(logdir=os.path.join(args.output_dir, "eval"), comment="Linear")
+
+
     processor = NerProcessor()
     label_list = processor.get_labels()
     num_labels = len(label_list)
@@ -121,8 +134,10 @@ def main():
         tokenizer = BertTokenizer.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path, 
                     do_lower_case=args.do_lower_case)
         config = BertConfig.from_pretrained(args.config_name if args.config_name else args.model_name_or_path, 
-                num_tags=num_labels)
-        model = BERT_BiLSTM_CRF.from_pretrained(args.model_name_or_path, config=config)
+                num_labels=num_labels)
+
+        model = BERT_BiLSTM_CRF.from_pretrained(args.model_name_or_path, config=config, 
+                need_birnn=args.need_birnn, rnn_dim=args.rnn_dim)
 
         model.to(device)
         
@@ -167,9 +182,9 @@ def main():
         logger.info("  Total optimization steps = %d", t_total)
 
         model.train()
+        global_step = 0
+        tr_loss, logging_loss = 0.0, 0.0
         for ep in trange(int(args.num_train_epochs), desc="Epoch"):
-            tr_loss = 0
-            nb_tr_examples, nb_tr_steps = 0, 0
             for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
                 batch = tuple(t.to(device) for t in batch)
                 input_ids, input_mask, segment_ids, label_ids = batch
@@ -184,12 +199,19 @@ def main():
                 loss.backward()
                 tr_loss += loss.item()
                 if (step + 1) % args.gradient_accumulation_steps == 0:
-                    scheduler.step()  # Update learning rate schedule
                     optimizer.step()
+                    scheduler.step()  # Update learning rate schedule
                     model.zero_grad()
-                    # global_step += 1
+                    global_step += 1
+                    
+                    if args.logging_steps > 0 and global_step % args.logging_steps == 0:
+                        tr_loss_avg = (tr_loss-logging_loss)/args.logging_steps
+                        writer.add_scalar("Train/loss", tr_loss_avg, global_step)
+                        logging_loss = tr_loss
 
-            logger.info('train loss: {:}'.format(tr_loss))
+            logger.info(f'epoch {ep}, train loss: {tr_loss}')
+        # writer.add_graph(model)
+        writer.close()
 
         model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
         model_to_save.save_pretrained(args.output_dir)
@@ -238,9 +260,9 @@ def main():
             label_ids = label_ids.to(device)
 
             with torch.no_grad():
-                logits = model(input_ids, segment_ids, input_mask)[0]
-            logits = torch.argmax(F.log_softmax(logits, dim=2), dim=2)
-            logits = logits.detach().cpu().numpy()
+                logits = model.predict(input_ids, segment_ids, input_mask)
+            # logits = torch.argmax(F.log_softmax(logits, dim=2), dim=2)
+            # logits = logits.detach().cpu().numpy()
 
             for l in logits:
 
@@ -259,11 +281,6 @@ def main():
                     else:
                         f.write(f"{ot} O {pl}\n")
                 f.write("\n")
-
-
-
-
-
 
 if __name__ == "__main__":
     main()
