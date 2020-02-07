@@ -19,7 +19,7 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 from tensorboardX import SummaryWriter
 
-from utils import NerProcessor, convert_examples_to_features
+from utils import NerProcessor, convert_examples_to_features, get_Dataset
 from models import BERT_BiLSTM_CRF
 
 from pytorch_transformers import (WEIGHTS_NAME, BertConfig, BertTokenizer)
@@ -43,12 +43,15 @@ def boolean_string(s):
         raise ValueError('Not a valid boolean string')
     return s == 'True'
 
+def evaluate(args, ):
+
+
 def main():
     parser = argparse.ArgumentParser()
 
     ## Required parameters
     parser.add_argument("--train_file", default=None, type=str)
-    parser.add_argument("--dev_file", default=None, type=str)
+    parser.add_argument("--eval_file", default=None, type=str)
     parser.add_argument("--test_file", default=None, type=str)
     parser.add_argument("--model_name_or_path", default=None, type=str)
     parser.add_argument("--output_dir", default=None, type=str)
@@ -144,22 +147,12 @@ def main():
         if n_gpu > 1:
             model = torch.nn.DataParallel(model)
 
-        train_examples = processor.get_examples(args.train_file)
-
-        train_features = convert_examples_to_features(
-            args, train_examples, label_list, args.max_seq_length, tokenizer
-        )
-
-
-        all_input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long)
-        all_input_mask = torch.tensor([f.input_mask for f in train_features], dtype=torch.long)
-        all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
-        all_label_ids = torch.tensor([f.label_id for f in train_features], dtype=torch.long)
-
-        train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+        train_examples, train_features, train_data = get_Dataset(args, processor, tokenizer, mode="train")
         train_sampler = RandomSampler(train_data)
-
         train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
+
+        if args.eval:
+            eval_examples, eval_features, eval_data = get_Dataset(args, processor, tokenizer, mode="eval")
 
         if args.max_steps > 0:
             t_total = args.max_steps

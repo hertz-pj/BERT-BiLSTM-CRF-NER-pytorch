@@ -2,6 +2,7 @@
 import logging
 import os
 import sys
+import torch
 
 from tqdm import tqdm
 
@@ -170,3 +171,31 @@ def convert_examples_to_features(args, examples, label_list, max_seq_length, tok
                               ori_tokens=ori_tokens))
 
     return features
+
+
+def get_Dataset(args, processor, tokenizer, mode="train"):
+    if mode == "train":
+        filepath = args.train_file
+    elif mode == "eval":
+        filepath = args.eval_file
+    elif mode == "test":
+        filepath = args.test_file
+    else:
+        raise ValueError("mode must be one of train, eval, or test")
+
+    examples = processor.get_examples(filepath)
+    label_list = processor.get_labels()
+
+    features = convert_examples_to_features(
+        args, examples, label_list, args.max_seq_length, tokenizer
+    )
+
+    all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
+    all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
+    all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
+    all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.long)
+
+    data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+
+    return examples, features, data
+
