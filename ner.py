@@ -43,7 +43,8 @@ def boolean_string(s):
         raise ValueError('Not a valid boolean string')
     return s == 'True'
 
-def evaluate(args, ):
+def evaluate(args):
+    pass
 
 
 def main():
@@ -90,14 +91,13 @@ def main():
 
     parser.add_argument("--gpu_id", default="0", type=str)
 
+
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
 
     device = torch.device("cuda")
     n_gpu = torch.cuda.device_count()
-
-    
 
     logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                         datefmt = '%m/%d/%Y %H:%M:%S',
@@ -125,10 +125,10 @@ def main():
     
     writer = SummaryWriter(logdir=os.path.join(args.output_dir, "eval"), comment="Linear")
 
-
     processor = NerProcessor()
-    label_list = processor.get_labels()
+    label_list = processor.get_labels(args)
     num_labels = len(label_list)
+    args.label_list = label_list
 
     # Prepare optimizer and schedule (linear warmup and decay)
 
@@ -138,7 +138,6 @@ def main():
                     do_lower_case=args.do_lower_case)
         config = BertConfig.from_pretrained(args.config_name if args.config_name else args.model_name_or_path, 
                 num_labels=num_labels)
-
         model = BERT_BiLSTM_CRF.from_pretrained(args.model_name_or_path, config=config, 
                 need_birnn=args.need_birnn, rnn_dim=args.rnn_dim)
 
@@ -151,7 +150,7 @@ def main():
         train_sampler = RandomSampler(train_data)
         train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
 
-        if args.eval:
+        if args.do_eval:
             eval_examples, eval_features, eval_data = get_Dataset(args, processor, tokenizer, mode="eval")
 
         if args.max_steps > 0:
@@ -223,30 +222,21 @@ def main():
         model = BERT_BiLSTM_CRF.from_pretrained(args.output_dir)
         model.to(device)
 
-        eval_examples = processor.get_examples(args.test_file)
-        eval_features = convert_examples_to_features(
-            args, eval_examples, label_list, args.max_seq_length, tokenizer
-        )
+        test_examples, test_features, test_data = get_Dataset(args, processor, tokenizer, mode="test")
 
         logger.info("***** Running test *****")
-        logger.info(f" Num examples = {len(eval_examples)}")
+        logger.info(f" Num examples = {len(test_examples)}")
         logger.info(f" Batch size = {args.eval_batch_size}")
 
-        all_ori_tokens = [f.ori_tokens for f in eval_features]
-        all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
-        all_input_mask = torch.tensor([f.input_mask for f in eval_features], dtype=torch.long)
-        all_segment_ids = torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long)
-        all_label_ids = torch.tensor([f.label_id for f in eval_features], dtype=torch.long)
-
-        eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
-        eval_sampler = SequentialSampler(eval_data)
-        eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
+        all_ori_tokens = [f.ori_tokens for f in test_features]
+        test_sampler = SequentialSampler(test_data)
+        test_dataloader = DataLoader(test_data, sampler=test_sampler, batch_size=args.eval_batch_size)
         model.eval()
 
         pred_labels = []
         
-        for b_i, (input_ids, input_mask, segment_ids, label_ids) in enumerate(tqdm(eval_dataloader, desc="Evaluating")):
-            tr_loss_total = 0
+        for b_i, (input_ids, input_mask, segment_ids, label_ids) in enumerate(tqdm(test_dataloader, desc="Predicting")):
+            
             input_ids = input_ids.to(device)
             input_mask = input_mask.to(device)
             segment_ids = segment_ids.to(device)

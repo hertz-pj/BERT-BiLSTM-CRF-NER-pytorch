@@ -3,7 +3,9 @@ import logging
 import os
 import sys
 import torch
+import pickle
 
+from torch.utils.data import TensorDataset
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
@@ -29,16 +31,14 @@ class InputFeatures(object):
 
 
 class NerProcessor(object):
-
     def read_data(self, input_file):
-
+        """Reads a BIO data."""
         with open(input_file, "r", encoding="utf-8") as f:
             lines = []
             words = []
             labels = []
             
-            for line in f.readlines():
-                
+            for line in f.readlines():   
                 contends = line.strip()
                 tokens = line.strip().split("\t")
 
@@ -46,17 +46,43 @@ class NerProcessor(object):
                     words.append(tokens[0])
                     labels.append(tokens[1])
                 else:
-                    if len(contends) == 0:
-                        l = " ".join([label for label in labels if len(label) > 0])
-                        w = " ".join([word for word in words if len(word) > 0])
-                        lines.append([l, w])
+                    if len(contends) == 0 and len(words) > 0:
+                        label = []
+                        word = []
+                        for l, w in zip(labels, words):
+                            if len(l) > 0 and len(w) > 0:
+                                label.append(l)
+                                word.append(w)
+                        lines.append([' '.join(label), ' '.join(word)])
                         words = []
                         labels = []
             
             return lines
     
-    def get_labels(self):
-        return ["O", "B", "I"]
+    def get_labels(self, args):
+        labels = set()
+        if os.path.exists(os.path.join(args.output_dir, "label_list.pkl")):
+            logger.info(f"loading labels info from {args.output_dir}")
+            with open(os.path.join(args.output_dir, "label_list.pkl"), "rb") as f:
+                labels = pickle.load(f)
+        else:
+            # get labels from train data
+            logger.info(f"loading labels info from train file and dump in {args.output_dir}")
+            with open(args.train_file) as f:
+                for line in f.readlines():
+                    tokens = line.strip().split("\t")
+
+                    if len(tokens) == 2:
+                        labels.add(tokens[1])
+
+            if len(labels) > 0:
+                with open(os.path.join(args.output_dir, "label_list.pkl"), "wb") as f:
+                    pickle.dump(labels, f)
+            else:
+                logger.info("loading error and return the default labels B,I,O")
+                labels = {"O", "B", "I"}
+        
+        return labels 
 
     def get_examples(self, input_file):
         examples = []
@@ -184,7 +210,7 @@ def get_Dataset(args, processor, tokenizer, mode="train"):
         raise ValueError("mode must be one of train, eval, or test")
 
     examples = processor.get_examples(filepath)
-    label_list = processor.get_labels()
+    label_list = args.label_list
 
     features = convert_examples_to_features(
         args, examples, label_list, args.max_seq_length, tokenizer
