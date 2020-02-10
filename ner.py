@@ -12,6 +12,7 @@ import time
 import numpy as np
 import torch
 import torch.nn.functional as F
+import pickle
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
 from torch.utils.data.distributed import DistributedSampler
@@ -21,6 +22,7 @@ from tensorboardX import SummaryWriter
 
 from utils import NerProcessor, convert_examples_to_features, get_Dataset
 from models import BERT_BiLSTM_CRF
+import conlleval
 
 from pytorch_transformers import (WEIGHTS_NAME, BertConfig, BertTokenizer)
 from pytorch_transformers import AdamW, WarmupLinearSchedule
@@ -43,8 +45,51 @@ def boolean_string(s):
         raise ValueError('Not a valid boolean string')
     return s == 'True'
 
-def evaluate(args):
-    pass
+def evaluate(args, data, model, id2label, all_ori_tokens):
+    model.eval()
+    sampler = SequentialSampler(data)
+    dataloader = DataLoader(data, sampler=sampler, batch_size=args.train_batch_size)
+
+    logger.info("***** Running eval *****")
+    # logger.info(f" Num examples = {len(data)}")
+    # logger.info(f" Batch size = {args.eval_batch_size}")
+    pred_labels = []
+    ori_labels = []
+
+    for b_i, (input_ids, input_mask, segment_ids, label_ids) in enumerate(tqdm(dataloader, desc="Evaluating")):
+        
+        input_ids = input_ids.to(args.device)
+        input_mask = input_mask.to(args.device)
+        segment_ids = segment_ids.to(args.device)
+        label_ids = label_ids.to(args.device)
+
+        with torch.no_grad():
+            logits = model.predict(input_ids, segment_ids, input_mask)
+        # logits = torch.argmax(F.log_softmax(logits, dim=2), dim=2)
+        # logits = logits.detach().cpu().numpy()
+
+        for l in logits:
+            pred_labels.append([id2label[idx] for idx in l])
+        
+        for l in label_ids:
+            ori_labels.append([id2label[idx] for idx in l])
+    
+    eval_list = []
+    for ori_tokens, oril, prel in zip(all_ori_tokens, ori_labels, pred_labels):
+        for ot, ol, pl in ori_tokens, oril, prel:
+            if ot in ["[CLS]", "[SEP]"]:
+                continue
+            eval_list.append(f"{ot} {ol} {pl}\n")
+        eval_list.append("\n")
+    
+    # eval the model 
+    counts = conlleval.evaluate(eval_list)
+    conlleval.report(counts)
+
+    # namedtuple('Metrics', 'tp fp fn prec rec fscore')
+    overall, by_type = metrics(counts)
+    
+    return overall, by_type
 
 
 def main():
@@ -96,7 +141,7 @@ def main():
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
 
-    device = torch.device("cuda")
+    args.device = torch.device("cuda")
     n_gpu = torch.cuda.device_count()
 
     logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
@@ -130,6 +175,16 @@ def main():
     num_labels = len(label_list)
     args.label_list = label_list
 
+    if os.path.exists(os.path.join(args.output_dir, "label2id")):
+        with open(os.path.join(args.output_dir, "label2id"), "rb") as f:
+            label2id = pickle.load(f)
+    else:
+        label2id = {i:l for i,l in enumerate(label_list)}
+        with open(os.path.join(args.output_dir, "label2id"), "wb") as f:
+            pickle.dump(label2id, f)      
+    
+    id2label = {value:key for key,value in label2id.items()} 
+
     # Prepare optimizer and schedule (linear warmup and decay)
 
     if args.do_train:
@@ -152,7 +207,7 @@ def main():
 
         if args.do_eval:
             eval_examples, eval_features, eval_data = get_Dataset(args, processor, tokenizer, mode="eval")
-
+      
         if args.max_steps > 0:
             t_total = args.max_steps
             args.num_train_epochs = args.max_steps // (len(train_dataloader) // args.gradient_accumulation_steps) + 1
@@ -200,8 +255,12 @@ def main():
                         tr_loss_avg = (tr_loss-logging_loss)/args.logging_steps
                         writer.add_scalar("Train/loss", tr_loss_avg, global_step)
                         logging_loss = tr_loss
+            
+            if args.do_eval:
+                all_ori_tokens_eval = [f.ori_tokens for f in eval_features]
+                overall, by_type = evaluate(args, eval_data, model, id2label, all_ori_tokens_eval)
 
-            logger.info(f'epoch {ep}, train loss: {tr_loss}')
+            # logger.info(f'epoch {ep}, train loss: {tr_loss}')
         # writer.add_graph(model)
         writer.close()
 
@@ -251,7 +310,7 @@ def main():
 
                 pred_label = []
                 for idx in l:
-                    pred_label.append(label_map[idx])
+                    pred_label.append(id2label[idx])
                 pred_labels.append(pred_label)
 
         assert len(pred_labels) == len(all_ori_tokens)
