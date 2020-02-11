@@ -72,11 +72,11 @@ def evaluate(args, data, model, id2label, all_ori_tokens):
             pred_labels.append([id2label[idx] for idx in l])
         
         for l in label_ids:
-            ori_labels.append([id2label[idx] for idx in l])
+            ori_labels.append([id2label[idx.item()] for idx in l])
     
     eval_list = []
     for ori_tokens, oril, prel in zip(all_ori_tokens, ori_labels, pred_labels):
-        for ot, ol, pl in ori_tokens, oril, prel:
+        for ot, ol, pl in zip(ori_tokens, oril, prel):
             if ot in ["[CLS]", "[SEP]"]:
                 continue
             eval_list.append(f"{ot} {ol} {pl}\n")
@@ -87,7 +87,7 @@ def evaluate(args, data, model, id2label, all_ori_tokens):
     conlleval.report(counts)
 
     # namedtuple('Metrics', 'tp fp fn prec rec fscore')
-    overall, by_type = metrics(counts)
+    overall, by_type = conlleval.metrics(counts)
     
     return overall, by_type
 
@@ -130,6 +130,7 @@ def main():
     parser.add_argument("--max_steps", default=-1, type=int)
     parser.add_argument("--do_lower_case", action='store_true')
     parser.add_argument("--logging_steps", default=500, type=int)
+    parser.add_argument("--clean", default=False, type=boolean_string, help="clean the output dir")
 
     parser.add_argument("--need_birnn", default=False, type=boolean_string)
     parser.add_argument("--rnn_dim", default=128, type=int)
@@ -139,9 +140,9 @@ def main():
 
     args = parser.parse_args()
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
-
-    args.device = torch.device("cuda")
+    device = torch.device("cuda")
+    # os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_
+    args.device = device
     n_gpu = torch.cuda.device_count()
 
     logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
@@ -159,7 +160,26 @@ def main():
     # if not os.path.exists(tmp_dir):
     #     os.makedirs(tmp_dir)
     # args.output_dir = tmp_dir
-
+    if args.clean and args.do_train:
+        # logger.info("清理")
+        if os.path.exists(args.output_dir):
+            def del_file(path):
+                ls = os.listdir(path)
+                for i in ls:
+                    c_path = os.path.join(path, i)
+                    print(c_path)
+                    if os.path.isdir(c_path):
+                        del_file(c_path)
+                        os.rmdir(c_path)
+                    else:
+                        os.remove(c_path)
+            try:
+                del_file(args.output_dir)
+            except Exception as e:
+                print(e)
+                print('pleace remove the files of output dir and data.conf')
+                exit(-1)
+    
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train:
         raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
     if not os.path.exists(args.output_dir):
@@ -179,7 +199,7 @@ def main():
         with open(os.path.join(args.output_dir, "label2id"), "rb") as f:
             label2id = pickle.load(f)
     else:
-        label2id = {i:l for i,l in enumerate(label_list)}
+        label2id = {l:i for i,l in enumerate(label_list)}
         with open(os.path.join(args.output_dir, "label2id"), "wb") as f:
             pickle.dump(label2id, f)      
     
@@ -231,7 +251,9 @@ def main():
         model.train()
         global_step = 0
         tr_loss, logging_loss = 0.0, 0.0
+        best_f1 = 0.0
         for ep in trange(int(args.num_train_epochs), desc="Epoch"):
+            model.train()
             for step, batch in enumerate(tqdm(train_dataloader, desc="Iteration")):
                 batch = tuple(t.to(device) for t in batch)
                 input_ids, input_mask, segment_ids, label_ids = batch
@@ -259,17 +281,34 @@ def main():
             if args.do_eval:
                 all_ori_tokens_eval = [f.ori_tokens for f in eval_features]
                 overall, by_type = evaluate(args, eval_data, model, id2label, all_ori_tokens_eval)
+                
+                # add eval result to tensorboard
+                f1_score = overall.fscore
+                writer.add_scalar("Eval/precision", overall.prec, ep)
+                writer.add_scalar("Eval/recall", overall.rec, ep)
+                writer.add_scalar("Eval/f1_score", overall.fscore, ep)
+
+                # save the best performs model
+                if f1_score > best_f1:
+                    logger.info(f"----------the best f1 is {f1_score}---------")
+                    best_f1 = f1_score
+                    model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
+                    model_to_save.save_pretrained(args.output_dir)
+                    tokenizer.save_pretrained(args.output_dir)
+
+                    # Good practice: save your training arguments together with the trained model
+                    torch.save(args, os.path.join(args.output_dir, 'training_args.bin'))
 
             # logger.info(f'epoch {ep}, train loss: {tr_loss}')
         # writer.add_graph(model)
         writer.close()
 
-        model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
-        model_to_save.save_pretrained(args.output_dir)
-        tokenizer.save_pretrained(args.output_dir)
+        # model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
+        # model_to_save.save_pretrained(args.output_dir)
+        # tokenizer.save_pretrained(args.output_dir)
 
         # Good practice: save your training arguments together with the trained model
-        torch.save(args, os.path.join(args.output_dir, 'training_args.bin'))
+        # torch.save(args, os.path.join(args.output_dir, 'training_args.bin'))
 
 
     if args.do_test:
