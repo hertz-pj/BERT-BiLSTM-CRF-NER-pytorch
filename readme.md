@@ -64,9 +64,12 @@ python ner.py \
     --output_dir $OUTPUT_DIR
 ```
 
-### 在中文CLUENER2020的eval集上的结果如下：
+### 在中文CLUENER2020的eval集上的结果
+#### 数据集
+https://github.com/CLUEbenchmark/CLUENER2020
+#### BERT-CRF
 ```
-processed 50260 tokens with 3072 phrases; found: 3363 phrases; correct: 2457.█
+processed 50260 tokens with 3072 phrases; found: 3363 phrases; correct: 2457.
 accuracy:  94.08%; precision:  73.06%; recall:  79.98%; FB1:  76.36
           address: precision:  54.63%; recall:  63.27%; FB1:  58.63  432
              book: precision:  77.02%; recall:  80.52%; FB1:  78.73  161
@@ -79,3 +82,20 @@ accuracy:  94.08%; precision:  73.06%; recall:  79.98%; FB1:  76.36
          position: precision:  74.46%; recall:  79.45%; FB1:  76.87  462
             scene: precision:  65.77%; recall:  69.86%; FB1:  67.75  222
 ```
+#### BERT-BiLSTM-CRF
+```
+processed 50260 tokens with 3072 phrases; found: 3293 phrases; correct: 2463.
+accuracy:  94.10%; precision:  74.80%; recall:  80.18%; FB1:  77.39
+          address: precision:  55.40%; recall:  63.27%; FB1:  59.07  426
+             book: precision:  76.54%; recall:  80.52%; FB1:  78.48  162
+          company: precision:  76.05%; recall:  81.48%; FB1:  78.67  405
+             game: precision:  77.95%; recall:  87.46%; FB1:  82.43  331
+       government: precision:  75.00%; recall:  85.02%; FB1:  79.70  280
+            movie: precision:  84.00%; recall:  83.44%; FB1:  83.72  150
+             name: precision:  85.29%; recall:  87.31%; FB1:  86.29  476
+     organization: precision:  76.76%; recall:  80.11%; FB1:  78.40  383
+         position: precision:  75.58%; recall:  82.22%; FB1:  78.76  471
+            scene: precision:  69.38%; recall:  69.38%; FB1:  69.38  209
+
+```
+### 
