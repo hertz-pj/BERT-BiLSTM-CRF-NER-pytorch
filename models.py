@@ -14,6 +14,7 @@ class BERT_BiLSTM_CRF(BertPreTrainedModel):
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         out_dim = config.hidden_size
+        self.need_birnn = need_birnn
 
         # 如果为False，则不要BiLSTM层
         if need_birnn:
@@ -36,6 +37,10 @@ class BERT_BiLSTM_CRF(BertPreTrainedModel):
         outputs = self.bert(input_ids, token_type_ids=token_type_ids, attention_mask=input_mask)
 
         sequence_output = outputs[0]
+        
+        if self.need_birnn:
+            sequence_output, _ = self.birnn(sequence_output)
+
         sequence_output = self.dropout(sequence_output)
         emissions = self.hidden2tag(sequence_output)
 
@@ -44,6 +49,4 @@ class BERT_BiLSTM_CRF(BertPreTrainedModel):
     def predict(self, input_ids, token_type_ids=None, input_mask=None):
         emissions = self.tag_outputs(input_ids, token_type_ids, input_mask)
         return self.crf.decode(emissions, input_mask.byte())
-
-
 
